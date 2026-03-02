@@ -1,0 +1,16 @@
+{
+  "name": "money-row-automations",
+  "version": "1.0.0",
+  "description": "Trigger.dev automation tasks for Money Row Properties",
+  "type": "module",
+  "scripts": {
+    "dev": "npx trigger.dev@latest dev",
+    "deploy": "npx trigger.dev@latest deploy"
+  },
+  "dependencies": {
+    "@trigger.dev/sdk": "^4.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
