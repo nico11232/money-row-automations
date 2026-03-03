@@ -8,7 +8,9 @@
     "deploy": "npx trigger.dev@latest deploy"
   },
   "dependencies": {
-    "@trigger.dev/sdk": "^4.4.1"
+    "@trigger.dev/sdk": "4.4.1",
+    "@upstash/redis": "^1.36.3",
+    "resend": "^6.9.3"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
