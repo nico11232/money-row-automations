@@ -20,6 +20,6 @@ jobs:
         run: npm ci
 
       - name: Deploy to Trigger.dev
-        run: npx trigger.dev@latest deploy --auto-accept
+        run: npx trigger.dev@latest deploy
         env:
           TRIGGER_ACCESS_TOKEN: ${{ secrets.TRIGGER_ACCESS_TOKEN }}
