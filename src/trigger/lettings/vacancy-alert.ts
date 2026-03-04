@@ -57,7 +57,7 @@ export const vacancyAlert = task({
       `Action required: begin re-letting preparations for this unit.`,
       ``,
       `---`,
-      `Sent by Money Row Properties Automation`,
+      `Sent by MoneyRow Properties Automation`,
       `Time: ${nowUK} (UK)`,
       `Run ID: ${payload.orchestratorRunId}`,
     ].join("\n");

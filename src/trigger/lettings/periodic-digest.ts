@@ -64,7 +64,7 @@ export const periodicDigest = schedules.task({
       ``,
       `Total periodic units: ${tenancies.length}`,
       `---`,
-      `Sent every Monday by Money Row Properties Automation`,
+      `Sent every Monday by MoneyRow Properties Automation`,
     ].join("\n");
 
     const { data, error } = await resend.emails.send({
