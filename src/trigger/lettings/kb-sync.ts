@@ -86,6 +86,127 @@ const COLUMN_MAP: Record<string, string> = {
 // Refresh token rotates on every use — always stored in Redis
 // ─────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────
+// Build a rich text block from a property record for embedding
+// ─────────────────────────────────────────────────────────────
+
+function buildPropertyText(r: Record<string, string>): string {
+  const line = (label: string, key: string) =>
+    r[key] ? `${label}: ${r[key]}` : null;
+
+  return [
+    `Property: ${r["property_name"] ?? ""} (ID: ${r["property_id"] ?? ""})`,
+    `Address: ${r["address_short"] ?? ""}, ${r["city"] ?? ""}, ${r["postcode_area"] ?? ""}`,
+    line("Type", "property_type"),
+    line("Total rooms", "total_rooms"),
+    line("Target tenant", "target_tenant"),
+    line("Typical age range", "typical_age_range"),
+    line("Gender mix", "gender_mix"),
+    line("Employment type", "employment_type"),
+    line("House vibe", "house_vibe"),
+    ``,
+    `HOUSE RULES`,
+    line("Smoking allowed", "smoking_allowed"),
+    line("Pets allowed", "pets_allowed"),
+    line("WFH friendly", "wfh_friendly"),
+    line("Overnight guests", "overnight_guests_policy"),
+    line("Quiet hours", "quiet_hours"),
+    ``,
+    `BILLS & BROADBAND`,
+    line("Bills included", "bills_included"),
+    line("Utilities included", "utilities_included"),
+    line("Council tax included", "council_tax_included"),
+    line("Broadband provider", "broadband_provider"),
+    line("Broadband speed (Mbps)", "broadband_speed_mbps"),
+    line("Fair usage policy", "fair_usage_policy"),
+    ``,
+    `CLEANING`,
+    line("Cleaning included", "cleaning_included"),
+    line("Cleaning frequency", "cleaning_frequency"),
+    line("Areas cleaned", "areas_cleaned"),
+    line("Cleaning exclusions", "cleaning_exclusions"),
+    ``,
+    `BATHROOMS`,
+    line("Total bathrooms", "total_bathrooms"),
+    line("Communal bathrooms", "communal_bathrooms"),
+    line("Share per communal bathroom", "share_per_bathroom"),
+    line("Shower type", "shower_type"),
+    line("Refurbishments planned", "refurbishments_planned"),
+    ``,
+    `KITCHEN`,
+    line("Ovens", "oven_count"),
+    line("Hobs", "hob_count"),
+    line("Microwave", "microwave"),
+    line("Dishwasher", "dishwasher"),
+    line("Washing machine", "washing_machine"),
+    line("Tumble dryer", "tumble_dryer"),
+    line("Fridges", "fridge_count"),
+    line("Allocated cupboard space", "allocated_cupboard_space"),
+    ``,
+    `COMMUNAL AREAS`,
+    line("Communal lounge", "communal_lounge"),
+    line("Communal TV", "communal_tv"),
+    ``,
+    `LOCATION`,
+    line("Distance to city centre", "distance_to_city_centre"),
+    line("Nearest supermarket", "nearest_supermarket"),
+    line("Nearest transport", "nearest_transport"),
+    line("Parking", "parking_type"),
+    line("Permit required", "permit_required"),
+    line("Bike storage", "bike_storage"),
+    line("Garden/outdoor", "garden_outdoor"),
+    line("Storage/shed", "storage_shed_notes"),
+    ``,
+    `TENANCY TERMS`,
+    line("Minimum term (months)", "minimum_term_months"),
+    line("Short-term option", "short_term_option"),
+    line("Notice period", "notice_period"),
+    line("Referencing required", "referencing_required"),
+    line("Guarantor required", "guarantor_required"),
+    line("Deposit (weeks)", "deposit_weeks"),
+    ``,
+    `COMPLIANCE`,
+    line("HMO licensed", "hmo_licensed"),
+    line("Licence ref", "licence_ref"),
+    line("Fire alarm", "fire_alarm_system"),
+    line("Fire doors", "fire_doors"),
+    line("Emergency lighting", "emergency_lighting"),
+    line("Secure locks", "secure_locks"),
+    line("External lighting", "external_lighting"),
+    line("Other safety notes", "other_safety_notes"),
+  ]
+    .filter((l) => l !== null)
+    .join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────
+// Call OpenAI embeddings API
+// ─────────────────────────────────────────────────────────────
+
+async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ input: text, model: "text-embedding-ada-002" }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`OpenAI embeddings API error (${res.status}): ${body}`);
+  }
+
+  const data = await res.json();
+  return data.data[0].embedding as number[];
+}
+
+// ─────────────────────────────────────────────────────────────
+// Microsoft OAuth token management
+// Refresh token rotates on every use — always stored in Redis
+// ─────────────────────────────────────────────────────────────
+
 async function getMicrosoftToken(): Promise<string> {
   const clientId = process.env.MICROSOFT_CLIENT_ID;
   const clientSecret = process.env.MICROSOFT_CLIENT_SECRET;
@@ -149,6 +270,7 @@ export const kbSync = schedules.task({
       "UPSTASH_REDIS_REST_TOKEN",
       "SUPABASE_URL",
       "SUPABASE_SERVICE_ROLE_KEY",
+      "OPENAI_API_KEY",
     ].filter((v) => !process.env[v]);
 
     if (missing.length > 0) {
@@ -237,10 +359,47 @@ export const kbSync = schedules.task({
     const propertyIds = records.map((r) => r["property_id"]);
     console.log(`Synced ${records.length} properties: ${propertyIds.join(", ")}`);
 
+    // ── 5. Generate embeddings and upsert into property_embeddings ─
+    let embeddingsUpserted = 0;
+    let embeddingErrors = 0;
+
+    for (const record of records) {
+      try {
+        const text = buildPropertyText(record);
+        const embedding = await getEmbedding(text, process.env.OPENAI_API_KEY!);
+
+        const { error: embErr } = await supabase.from("property_embeddings").upsert(
+          {
+            property_id: record["property_id"],
+            content: text,
+            metadata: { property_id: record["property_id"], property_name: record["property_name"] },
+            embedding,
+          },
+          { onConflict: "property_id" }
+        );
+
+        if (embErr) {
+          console.error(`Embedding upsert failed for ${record["property_id"]}:`, embErr.message);
+          embeddingErrors++;
+        } else {
+          embeddingsUpserted++;
+        }
+      } catch (err) {
+        console.error(`Embedding generation failed for ${record["property_id"]}:`, err);
+        embeddingErrors++;
+      }
+    }
+
+    console.log(
+      `Embeddings: ${embeddingsUpserted} upserted, ${embeddingErrors} errors`
+    );
+
     return {
       synced: records.length,
       skipped: dataRows.length - records.length,
       properties: propertyIds,
+      embeddingsUpserted,
+      embeddingErrors,
     };
   },
 });
