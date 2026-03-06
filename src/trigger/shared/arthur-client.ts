@@ -4,6 +4,18 @@ import { Redis } from "@upstash/redis";
 // Types
 // ─────────────────────────────────────────────────────────────
 
+export interface ArthurTransaction {
+  id: number;
+  transaction_type: string;
+  tenancy_id: number;
+  payee_tenant_id: number | null;
+  payee_name: string;
+  amount_outstanding: string;
+  is_overdue: boolean;
+  is_outstanding: boolean;
+  due_date: string;
+}
+
 export interface ArthurTenancy {
   id: number;
   ref: string;
@@ -34,6 +46,17 @@ interface ArthurTokenResponse {
 
 interface ArthurTenanciesPage {
   data: ArthurTenancy[];
+  pagination: {
+    page: number;
+    current: number;
+    count: number;
+    pageCount: number;
+    limit: number;
+  };
+}
+
+interface ArthurTransactionsPage {
+  data: ArthurTransaction[];
   pagination: {
     page: number;
     current: number;
@@ -151,4 +174,81 @@ export async function fetchAllTenancies(
   } while (page <= totalPages);
 
   return all;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Fetch all outstanding rent charges (paginated)
+// ─────────────────────────────────────────────────────────────
+
+export async function fetchOutstandingRentCharges(): Promise<ArthurTransaction[]> {
+  const entityId = process.env.ARTHUR_ENTITY_ID;
+  if (!entityId) throw new Error("ARTHUR_ENTITY_ID is not set");
+
+  const accessToken = await getArthurToken();
+  const all: ArthurTransaction[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    if (page > 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+
+    const res = await fetch(
+      `https://api.arthuronline.co.uk/v2/transactions?payment_type=charge&is_outstanding=true&page=${page}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "X-EntityID": entityId,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (res.status === 429) throw new Error("Arthur API rate limit hit (429) — will retry");
+    if (!res.ok) throw new Error(`Arthur transactions API error (${res.status}) on page ${page}`);
+
+    const pageData: ArthurTransactionsPage = await res.json();
+    // Filter in code — URL transaction_type param returns 0 results (confirmed via live API test)
+    const rentCharges = pageData.data.filter(
+      (t) => t.transaction_type === "Rent Charge" && t.is_overdue === true
+    );
+    all.push(...rentCharges);
+    totalPages = pageData.pagination.pageCount;
+    page++;
+  } while (page <= totalPages);
+
+  return all;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Log a note against a tenancy in Arthur
+// ─────────────────────────────────────────────────────────────
+
+export async function logArthurNote(
+  tenancyId: number,
+  content: string
+): Promise<{ id: number }> {
+  const entityId = process.env.ARTHUR_ENTITY_ID;
+  if (!entityId) throw new Error("ARTHUR_ENTITY_ID is not set");
+
+  const accessToken = await getArthurToken();
+
+  const res = await fetch(`https://api.arthuronline.co.uk/v2/tenancies/${tenancyId}/notes`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "X-EntityID": entityId,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ content }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Arthur notes API error (${res.status}): ${body}`);
+  }
+
+  const data: { id: number } = await res.json();
+  return data;
 }
